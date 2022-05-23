@@ -1,0 +1,264 @@
+#
+# This is a Shiny web application. You can run the application by clicking
+# the 'Run App' button above.
+#
+# Find out more about building applications with Shiny here:
+#
+#    http://shiny.rstudio.com/
+#
+
+library(shiny)
+library(shinythemes)
+library(dplyr)
+library(readr)
+library(ggplot2)
+library(lubridate)
+library(janitor)
+library(terra)
+library(spatialEco)
+library(sf)
+library(conflicted)
+library(reshape2)
+library(leaflet)
+library(RColorBrewer)
+library(scales)
+library(maps)
+library(mapproj)
+
+conflict_prefer("filter","dplyr")
+conflict_prefer("renderDataTable", "shiny")
+
+#Import NOAA Cruise Data 
+
+cruisedata <- read_csv("cruisedata1.csv")
+
+
+
+# Define UI for application that draws a histogram
+ui <- fluidPage(
+  
+  # Application title
+  titlePanel("Habitat Suitability for the Pacific West Coast"),
+  
+  # InputId is not working wants to be bins 
+  sidebarLayout( 
+    sidebarPanel(
+      htmlOutput("title1"),
+      hr(style = "border-top: 3px solid #a9a9a9;"),
+      sliderInput("Depth", #Depth
+                  "Select Depth Range:",
+                  min = 1,
+                  max = 4200,
+                  value= c(1,2500)),
+      sliderInput("Temperature", #temperature
+                  "Select Temperature Range:",
+                  min = 1.0,
+                  max = 22.0,
+                  value = c(1,15)),
+      sliderInput("pH", #pH
+                  "Select pH Range:",
+                  min = 7,
+                  max = 8.5,
+                  value = c(7.0,8.0)),
+      sliderInput("Omega_Ar", #Omega_Ar
+                  "Select Aragonite Saturation Range:",
+                  min = 0.1,
+                  max = 5,
+                  value = c(0.1,3)),
+      sliderInput("DO", #DO2
+                  "Select Dissolved Oxygen Range:",
+                  min = 1,
+                  max = 510,
+                  value = c(1,300)),
+      tableOutput("values"),
+      hr(style = "border-top: 3px solid #a9a9a9;"),
+      htmlOutput("title2"),
+      tableOutput("details")
+    ),
+    
+    mainPanel(
+      
+      # Output: Tabset w/ plot, summary, and table ----
+      tabsetPanel(type = "tabs",
+                  tabPanel("Map", htmlOutput("instructions"),
+                           #htmlOutput("title2"),
+                          
+                           htmlOutput("title3"),
+                           #plotOutput("map")),
+                           leafletOutput("leafletmap")),
+                  tabPanel("Table", htmlOutput("instructions2"), DT::dataTableOutput("table")),
+                  tabPanel("User Guide", htmlOutput("summary"))
+                  
+      )
+      
+    )
+  )
+)
+
+################ SERVER  ################# 
+
+server <- function(input, output) {
+  
+  
+  # SLIDERS AND STATIC TABLE ################################ 
+  output$title1 <-renderText({
+    paste("<font size = 4>","<b>", "Create Threshold by Selecting Desired Parameters", "</b>", "<br>","<br>")
+  })
+  
+  output$title2 <-renderText({
+    paste("<br>", "<b>", "Selected Habitat Parameters and Values:", "</b>", "<small>", "Change using Sliders.", "</small>", "<br>","<br>")
+  })
+  
+  sliderValues <- reactive({
+    data.frame(
+      Parameters = c("Depth",
+                     "Temperature",
+                     "pH",
+                     "Aragonite Saturation",
+                     "Dissolved Oxygen"),
+      Value = as.character(c(paste(input$Depth[1], "to", input$Depth[2], "meters"),
+                             paste(input$Temperature[1], "to", input$Temperature[2], "°C"),
+                             paste(input$pH[1], "to", input$pH[2]),
+                             paste(input$Omega_Ar[1], "to", input$Omega_Ar[2]),
+                             paste(input$DO[1], "to", input$DO[2], "mg/L"))),
+      stringsAsFactors = TRUE)
+  })
+  
+  # DATA TABLE ################################ 
+  data2 <- reactive({
+    data.frame(
+      Longitude = as.numeric(c(paste(cruisedata$Longitude))),
+      Latitude = as.numeric(c(paste(cruisedata$Latitude))),
+      Depth = as.character(c(paste(cruisedata$Depth))),
+      Temp = as.character(c(paste(cruisedata$Temperature))),
+      pH = as.character(c(paste(round(cruisedata$pH, digits=2)))),
+      Omega = as.character(c(paste(round(cruisedata$Omega_Ar, digits=2)))),
+      DO = as.character(c(paste(cruisedata$DO))),
+      Salinity = as.character(c(paste(cruisedata$Salinity))),
+      Sigma = as.character(c(paste(cruisedata$Sigma))),
+      DIC = as.character(c(paste(cruisedata$DIC))),
+      TALK = as.character(c(paste(cruisedata$TALK))),
+      Suitability= ifelse(cruisedata$Depth >= input$Depth[1] & cruisedata$Depth <=  input$Depth[2] &
+                            cruisedata$Temperature >= input$Temperature[1] & cruisedata$Temperature <=  input$Temperature[2] &
+                            cruisedata$Omega_Ar >= input$Omega_Ar[1] & cruisedata$Omega_Ar <=  input$Omega_Ar[2] &
+                            cruisedata$DO >= input$DO[1] & cruisedata$DO <=  input$DO[2] 
+                          ,"High","Low/Not Suitable") 
+      #Presence = 
+    )
+  })
+  # MAP ################################ The map is not yet reactive to the new data table 
+  output$title3 <-renderText({
+    paste("<br>", "<b>","<font size = 4>",  "Pacific Coast Map:", "</font>", "</b>", "Stations are featured. Each Green station means that there is high suitability. Each Green station means that there is low suitability or the environment is not suitable. ", "<b>", "For the dark green and dark red stations, check the table! It means that different depths can be suitable/ not suitable.", "</b>", "<br>", "<br>")
+  })
+  
+  map2 <-reactive({
+    ggplot(data2(), aes(x= Longitude, y= Latitude, color= Suitability )) + geom_point() + 
+      scale_color_manual(values= c("red","green"), breaks= c("Low/Not Suitable", "High")) 
+  })
+  # ggplot(cruisedata1) + geom_sf()
+  
+  ################ Static Table & Description of app(Tab 1) #################
+  #will eventually have the details of sliders and map here
+  output$details <-renderTable({
+    sliderValues()
+  })
+  
+  output$instructions <-renderText({
+    paste("<br>","<br>","<b>","<font size = 4>", "Start by creating a threshold by selecting your desired parameters! ","</font>", "</b>", "<br>","For more information, check out the User Guide.", "<br>", "<br>")  
+  })
+  
+  
+  ################ Reactive Table (Tab 2) ################# 
+  # Would put filter table here, DT function 
+  output$instructions2 <-renderText({
+    paste("<br>","<br>","<b>","<font size = 4>",  "Table:","</b>", "</font>","The selected parameters are filtered. Explore the different places where you can find your species!", "<br>","<br>","<br>")
+  })
+  
+  output$table <- DT::renderDataTable({
+    data2()
+  })
+  
+  
+  ################ Map depends on Reactive Table Output (Tab 1) ################# 
+  output$map <- renderPlot({
+    map2()
+  })
+  
+  output$leafletmap <- renderLeaflet({
+    pal <- colorFactor(c("green", "red"), domain = c("High", "Low/Not Suitable"))
+    
+    data2() %>% 
+      leaflet() %>% 
+      addTiles() %>% 
+      addCircleMarkers(lng = ~Longitude,
+                       lat = ~Latitude,
+                       stroke = FALSE,
+                       radius = 5,
+                       fillOpacity = .5,
+                       color = ~pal(Suitability),
+                       label = paste(
+                         "Coordinates:","(",
+                         data2()$Longitude, ",",
+                         data2()$Latitude,")", "<br>",
+                         "Depth:", 
+                         data2()$Depth,
+                         "meters, Suitablity:",
+                         data2()$Suitability
+                       ) %>%
+                         lapply(htmltools::HTML)
+      ) %>%
+      addLegend(
+        pal = pal,
+        values = data2()$Suitability,
+        position = "bottomleft",
+        title = "Suitability:",
+        opacity = 0.9) %>%
+      addMiniMap() 
+    
+  })
+  
+  
+  ################ Additional Information (Tab 3)  ################# 
+  # can put details here/ instructions 
+  output$summary <- renderText({
+    paste(
+      "<br>","<br>","<br>", "<b>", "<font size = 5>", "Introduction","</font>", "</b>", "<br>","<br>","This application  is designed to interactively visualize cruise data collected by NOAA and cooperators and provide a platform to understand and review the suitability of marine species by inputting desired parameters to make a mock threshold. Source code and additional information for this application will be available via the GitHub repository.", "<br>" , "<br>" , 
+      
+      "<br>","<b>","<font size = 4>", "Data", "</font>","</b>", "<br>", "<br>","All data used by this application is available through National Oceanic and Atmospheric Association (NOAA). Data from NOAA West Coast Ocean Acidification 2021 (WCOA) cruises have been loaded. The cruise was designed to obtain a synoptic snapshot of critical carbon, physical, and biogeochemical parameters related to ocean acidification (OA) in the coastal realm. Parameters like ocean carbonate chemistry, acidity, salinity, temperature, oxygen, nutrients, carbon and nitrogen isotopes, and chlorophyll from 17 transect lines of stations stretching from British Columbia, Canada to San Diego, California were collected to analyze how the marine food web is being affected by warming, ocean acidification, and deoxygenation in this region. More information can be found on the NOAA cruise website." ,"<br>" , "<br>" , 
+      
+      "<br>","<b>","<font size = 4>","Application Usage","</font>","<br>", "</b>","<br>",
+      "The application has two main inputs: a map and a table.","<br>" ,"<br>", 
+      "The map shows all the stations available. The table shows all of those sites and their associated parameters. The map and table inputs are responsive to the sliders. This is best used when the user has a desired/hypothetical threshold for a given species. The map will display the stations where the criteria made match the parameters. This is better understood with the table: “High” means the station/area is suitable for the species. “Low/ Not suitable” means that the sliders’ criteria were not able to fully match with any of the stations." , "<br>", "<br>", 
+      "<b>","<i>","Try this sample threshold curated by the Habitat Suitability Index for the Dungeness Crab:", "</b>","</i>","<br>",
+      "Depth: 60 - 120 meters", "<br>", 
+      "Temperature: 8.98 - 13.59 °C", "<br>", 
+      "pH: 7.47 - 7.95","<br>", 
+      "Aragonite Saturation: 1.00 - 2.41","<br>", 
+      "DO: 131 - 289 mg/L", "<br>", 
+      "<small>", "<br>","Hint: To omit a parameter select the whole range." , "</small>", "<br>",
+      
+      "<br>","<br>","<b>","<font size = 4>","Learn More:","</font>", "</b>", "This app features only five parameters but there are many more factors that can determine a habitat's suitability. Learn more about the factors featured on this app:", "<br>", "<br>",
+      
+      "<i>", "- Depth", "</i>", "is known to influence light intensity,  water temperature, and nutrient ability. Some marine species migrate to deeper depths during the day and return to shallow depths during the night. This process is called vertical migration and is important to consider when looking at marine species' suitability.","<br>", "<br>",
+      
+      "<i>","- Temperature","</i>", "is another important parameter to consider when exploring different marine environments and understanding physiological tolerances. Organisms have a particular temperature range at which they can survive and reproduce. As we observe the warming of our oceans, we are likely to see a decrease in habitat suitability for many marine organisms.", "<br>", "<br>",
+      
+      "<i>", "- Aragonite saturation", "</i>","state is commonly used to track ocean acidification because it is a measure of carbonate ion concentration shell building minerals). With an aragonite saturation state less than 1, we might expect some shells and skeletons to dissolve. This would cause low suitablity for many calcifying organisms.","<br>","<br>",
+      
+      "- Changes in ocean chemistry like","<i>", "pH","</i>", "can affect calcifying and non-calcifying organisms. Some marine organisms' shells and skeletons are made from calcium carbonate, which can dissolve due to changes in the oceanic carbon chemistry. These changes can also impact a species’ ability to detect predators.", "<br>","<br>",
+      
+      "- All aquatic animals need", "<i>", "dissolved oxygen (DO)", "</i>", "to breathe and survive. Low levels of oxygen, known as hypoxia, or no oxygen levels, known as anoxia, can occur when there is an excess of organic materials. Low levels of oxygen limit the photosynthesis of phytoplankton and impact large-scale ecological activity.","<br>","<br>",
+      
+      "<b>", "This application was made possible through the R Shiny platform, using packages like leaflet and ggplot. For more information feel free to contact the team!", "</b>", "<br>","<br>")
+    
+  })
+  
+  
+
+}
+
+# Run the application 
+shinyApp(ui = ui, server = server)
+
+
+
